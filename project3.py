@@ -4,9 +4,8 @@ import os
 import pymongo
 import ffmpeg
 import sys
-from PIL import Image
-import cv2
-import time
+import xlwt
+from tablib import Dataset
 #Argparse setup
 argparser = argparse.ArgumentParser(description=
 '''This script will take a Baselight export file and a Xytech file 
@@ -111,20 +110,19 @@ def get_video_info(in_filename):
 def generate_thumbnail(filename,in_filename, frame_time):
  
     out_filename = filename + ".png"
-    print(frame_time)
-    print(in_filename)
+    
     try:
-        #loglevel="quiet",
-        ffmpeg.input(in_filename, ss=frame_time).output(out_filename, vframes=1,s="96x74").overwrite_output().run()
+        
+        ffmpeg.input(in_filename, ss=frame_time).output(out_filename,loglevel="quiet", vframes=1,s="96x74").overwrite_output().run()
     except ffmpeg.Error as e:
-        #print('Error occurred:', e.stderr, file=sys.stderr)
+       
         print("Error")
         sys.exit(1)
 
 
     return out_filename
 
-def convert_frame_to_time(frame,full_timecode):
+def convert_frame_to_time(frame,full_timecode,export):
         fps = video_stream['r_frame_rate'].split('/')[0]
         fps = int(fps)
        
@@ -139,9 +137,12 @@ def convert_frame_to_time(frame,full_timecode):
             hours = minutes / 60
             minutes = minutes % 60
         result = "{0:02d}:{1:02d}:{2:02d}".format(int(hours), int(minutes), int(seconds))
-        if (full_timecode == True):
+        if (full_timecode == True and export == False):
 
             timecode = result + "." + str(frames)
+            return timecode
+        if (full_timecode == True and export == True):
+            timecode = result + ":" + str(frames)
             return timecode
         else:
             return result
@@ -208,44 +209,48 @@ def process_frames(video,BL_File, XY_File):
 
             else:
                 if int(tempLast) > 0:
-                    frame_start=convert_frame_to_time(tempStart, True)
-   
-                    frame_end=convert_frame_to_time(tempLast, True)
+                    frame_start=convert_frame_to_time(tempStart, True, True)
+                    frame_end=convert_frame_to_time(tempLast, True, True)
                     middle_frame = (int(tempStart) + int(tempLast)) / 2
-                    middle_frame = convert_frame_to_time(middle_frame, True)
+                    middle_frame = convert_frame_to_time(middle_frame, True, False)
                     thumbnail=generate_thumbnail(filename="Row "+str(count),in_filename=video, frame_time=middle_frame)
+                    
                     data.append((currentFolder,str(tempStart) + "-" + str(tempLast),str(frame_start)+ '-'+frame_end,))
                     count += 1
             
                 else:
-                    frame = convert_frame_to_time(tempStart, True)
+                    frame = convert_frame_to_time(tempStart, True, False)
                     thumbnail=generate_thumbnail(filename="Row "+str(count),in_filename=video, frame_time=frame)
-                    frame_start=convert_frame_to_time(tempStart, True)
+                    frame_start=convert_frame_to_time(tempStart, True, True)
                     data.append((currentFolder,str(tempStart) ,frame_start,''))
                     count += 1
                 tempStart = number
                 tempLast = 0
                 
         if int(tempLast) > 0:
-            frame_start=convert_frame_to_time(tempStart, True)
-            frame_end=convert_frame_to_time(tempLast, True)
+            frame_start=convert_frame_to_time(tempStart, True, True)
+            frame_end=convert_frame_to_time(tempLast, True, True)
             middle_frame = (int(tempStart) + int(tempLast)) / 2
-            middle_frame = convert_frame_to_time(middle_frame, True)
+            middle_frame = convert_frame_to_time(middle_frame, True, False)
             thumbnail=generate_thumbnail(filename="Row "+str(count),in_filename=video, frame_time=middle_frame)
             data.append((currentFolder,str(tempStart) + "-" + str(tempLast),str(frame_start)+ '-'+frame_end,''))
             count += 1
         else:
             
-            frame_start=convert_frame_to_time(tempStart, True)
+            frame=convert_frame_to_time(tempStart, True, False)
 
-            thumbnail=generate_thumbnail(filename="Row "+str(count),in_filename=video, frame_time=frame_start)
+            thumbnail=generate_thumbnail(filename="Row "+str(count),in_filename=video, frame_time=frame)
+            frame_start=convert_frame_to_time(tempStart, True, True)
             data.append((currentFolder,str(tempStart) ,frame_start,''))
             tempStart = number
             tempLast=0
             count += 1
-        
-    df = pd.DataFrame(data, columns=columns)
-    df.to_csv('Project1.csv', encoding='utf-8', index=False)
+    dataset = Dataset(*data, headers=columns)
+    
+    with open('Project1.xls', 'wb') as f:
+        f.write(dataset.export('xls'))
+
+   # df.to_excel(excel_writer='Project1.xls',engine ='xlwt' , index=False)
 
 
 
@@ -255,7 +260,7 @@ def process_video_files(in_filename, time):
     global video_stream
     BL_file =[]
     video_stream = get_video_info(in_filename)
-    frames_time=convert_frame_to_time(time, False)
+    frames_time=convert_frame_to_time(time, False, False)
     print("Frames Time: ", frames_time)
     #generate_thumbnail(in_filename,  frames_time)
     print("Max Frames: ", Video_Max_Frames)
