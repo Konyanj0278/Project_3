@@ -4,9 +4,9 @@ import os
 import pymongo
 import ffmpeg
 import sys
-import xlwt
-from tablib import Dataset
+import xlsxwriter
 #Argparse setup
+#fio-u-pRmOl_Jz1K25ztWSDW0HBmZlSoBpdKVQgffEuL6Uf1DDOEUC-vAIMIRa4x4exV1r
 argparser = argparse.ArgumentParser(description=
 '''This script will take a Baselight export file and a Xytech file 
 and uploaded the results to a DB. The script will also process video files before exporting
@@ -146,9 +146,33 @@ def convert_frame_to_time(frame,full_timecode,export):
             return timecode
         else:
             return result
-        
+def generate_video_clip(in_filename, out_filename, start_time, end_time):
+    global video_stream
+    fps = video_stream['r_frame_rate'].split('/')[0]
+    
+    estart_time = int(start_time) / int(fps)
+    eend_time = int(end_time) / int(fps) - estart_time
+    print("start time: ", estart_time)
+    print("end time: ", eend_time)
 
-def process_frames(video,BL_File, XY_File):
+    try:
+        input_file = ffmpeg.input(in_filename,ss=estart_time,t=eend_time).output((out_filename + ".mp4"),loglevel='quiet').overwrite_output().run()
+    except ffmpeg.Error as e:
+        print("Error")
+        print(e.stderr)
+        sys.exit(1)
+    return
+def upload_to_frameio(filename):
+    from frameioclient import FrameioClient
+
+    client = FrameioClient("fio-u-pRmOl_Jz1K25ztWSDW0HBmZlSoBpdKVQgffEuL6Uf1DDOEUC-vAIMIRa4x4exV1r")
+
+    asset = client.assets.upload(
+        destination_id="cbeec5e6-d995-4a77-a043-bcdbeb0ecd28",
+        filepath=filename
+        )
+
+def process_frames(video,BL_File, XY_File, in_filename):
     columns = ['Producer','Operator','Job','Notes']
     data =[]
     producer='Producer'
@@ -214,16 +238,11 @@ def process_frames(video,BL_File, XY_File):
                     middle_frame = (int(tempStart) + int(tempLast)) / 2
                     middle_frame = convert_frame_to_time(middle_frame, True, False)
                     thumbnail=generate_thumbnail(filename="Row "+str(count),in_filename=video, frame_time=middle_frame)
-                    
+                    generate_video_clip(in_filename, "Clip "+str(count), tempStart, tempLast)
                     data.append((currentFolder,str(tempStart) + "-" + str(tempLast),str(frame_start)+ '-'+frame_end,))
                     count += 1
             
-                else:
-                    frame = convert_frame_to_time(tempStart, True, False)
-                    thumbnail=generate_thumbnail(filename="Row "+str(count),in_filename=video, frame_time=frame)
-                    frame_start=convert_frame_to_time(tempStart, True, True)
-                    data.append((currentFolder,str(tempStart) ,frame_start,''))
-                    count += 1
+                
                 tempStart = number
                 tempLast = 0
                 
@@ -233,26 +252,29 @@ def process_frames(video,BL_File, XY_File):
             middle_frame = (int(tempStart) + int(tempLast)) / 2
             middle_frame = convert_frame_to_time(middle_frame, True, False)
             thumbnail=generate_thumbnail(filename="Row "+str(count),in_filename=video, frame_time=middle_frame)
+            generate_video_clip(in_filename, "Clip "+str(count),tempStart, tempLast)
             data.append((currentFolder,str(tempStart) + "-" + str(tempLast),str(frame_start)+ '-'+frame_end,''))
             count += 1
-        else:
-            
-            frame=convert_frame_to_time(tempStart, True, False)
+        
+    df = pd.DataFrame(data, columns=columns)
 
-            thumbnail=generate_thumbnail(filename="Row "+str(count),in_filename=video, frame_time=frame)
-            frame_start=convert_frame_to_time(tempStart, True, True)
-            data.append((currentFolder,str(tempStart) ,frame_start,''))
-            tempStart = number
-            tempLast=0
-            count += 1
-    dataset = Dataset(*data, headers=columns)
+    workbook =pd.ExcelWriter('Project.xlsx', engine='xlsxwriter')
+    df.to_excel(workbook, sheet_name='Sheet1')
+    #make loop for thumbnails from g3 onwards
+    worksheet = workbook.sheets['Sheet1']
     
-    with open('Project1.xls', 'wb') as f:
-        f.write(dataset.export('xls'))
-
-   # df.to_excel(excel_writer='Project1.xls',engine ='xlwt' , index=False)
-
-
+    for i in range(len(data)):
+        thumbnail = 'Row '+str(i)+'.png'
+        index = 'G'+str(i+5)
+        if (i+2) >(len(data)-2):
+            break
+        worksheet.insert_image(index, thumbnail, {'x_scale': 0.5, 'y_scale': 0.25})
+    workbook.close()
+    for i in range(len(data)):
+        if (i+2) >(len(data)-2):
+            break
+        vid = 'Clip '+str(i)+'.mp4'
+        upload_to_frameio(vid)
 
 
 
@@ -262,7 +284,7 @@ def process_video_files(in_filename, time):
     video_stream = get_video_info(in_filename)
     frames_time=convert_frame_to_time(time, False, False)
     print("Frames Time: ", frames_time)
-    #generate_thumbnail(in_filename,  frames_time)
+  
     print("Max Frames: ", Video_Max_Frames)
     db_query = {"Max Frames": {"$lt": int(Video_Max_Frames)}}
     BL_cursor = Baselight_col.find(db_query)
@@ -273,7 +295,7 @@ def process_video_files(in_filename, time):
     for document in XY_cursor:
         XY_file.append(document)
 
-    process_frames(in_filename,BL_file, XY_file)
+    process_frames(in_filename,BL_file, XY_file, in_filename)
     return
 
 if argparser.parse_args().baselight:
